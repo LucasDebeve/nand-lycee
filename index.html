@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NAND Lycée – Construis un ordinateur</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">NAND</span> <span class="brand-sub">Lycée</span></div>
+    <div class="top-info">
+      <span id="lvl-counter" class="pill"></span>
+      <span id="nand-counter" class="pill" title="Nombre de portes NAND utilisées au total (composants inclus)"></span>
+    </div>
+    <div class="top-actions">
+      <button id="btn-levels" class="btn">☰ Niveaux</button>
+      <button id="btn-help" class="btn ghost">? Aide</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="side">
+      <section class="card">
+        <p id="lvl-part" class="eyebrow"></p>
+        <h1 id="lvl-title"></h1>
+        <p id="lvl-desc"></p>
+        <details id="lvl-lesson-box">
+          <summary>📘 Rappel de cours</summary>
+          <p id="lvl-lesson"></p>
+        </details>
+        <div class="hint-box">
+          <button id="btn-hint" class="btn small">💡 Indice</button>
+          <ol id="hint-list"></ol>
+        </div>
+      </section>
+      <section class="card">
+        <h2>Table de vérité</h2>
+        <div id="result-banner" class="banner" hidden></div>
+        <div id="table-wrap" class="table-wrap"></div>
+      </section>
+    </aside>
+
+    <section class="work">
+      <div class="toolbar">
+        <button id="btn-test" class="btn primary">▶ Tester le circuit</button>
+        <button id="btn-undo" class="btn" title="Annuler (Ctrl+Z)">↶ Annuler</button>
+        <button id="btn-delete" class="btn" title="Supprimer la sélection (Suppr)">🗑 Supprimer</button>
+        <button id="btn-clear" class="btn ghost">Tout effacer</button>
+      </div>
+      <div class="palette-row">
+        <span class="palette-label">Composants :</span>
+        <div id="palette" class="palette"></div>
+      </div>
+      <div class="board-wrap">
+        <svg id="board" viewBox="0 0 1100 680" preserveAspectRatio="xMidYMid meet" aria-label="Plan de travail du circuit"></svg>
+        <p class="board-tip">Clique sur un composant pour l’ajouter, glisse-le pour le déplacer. Relie une sortie (à droite) à une entrée (à gauche) en glissant d’une borne à l’autre. Clique sur un interrupteur à gauche pour changer l’entrée.</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="dlg-levels">
+    <form method="dialog" class="dlg-head"><h2>Niveaux</h2><button class="btn ghost small" aria-label="Fermer">✕</button></form>
+    <div id="levels-list"></div>
+    <p class="muted"><button id="btn-reset" class="link">Effacer toute ma progression</button></p>
+  </dialog>
+
+  <dialog id="dlg-success">
+    <h2 id="success-title">Bravo !</h2>
+    <p id="success-text"></p>
+    <form method="dialog" class="dlg-actions">
+      <button class="btn">Continuer à modifier</button>
+      <button id="btn-next" value="next" class="btn primary">Niveau suivant →</button>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-help">
+    <form method="dialog" class="dlg-head"><h2>Bienvenue !</h2><button class="btn ghost small" aria-label="Fermer">✕</button></form>
+    <p>Dans ce jeu, tu pars d’une seule brique, la <strong>porte NAND</strong>, et tu reconstruis pas à pas tout ce qui compose un processeur : portes logiques, additionneurs, mémoire…</p>
+    <ul class="help-list">
+      <li><strong>Ajouter</strong> : clique sur un composant de la barre « Composants ».</li>
+      <li><strong>Relier</strong> : glisse d’une borne de sortie (à droite d’un composant) vers une borne d’entrée (à gauche). Un fil peut partir d’une sortie vers plusieurs entrées.</li>
+      <li><strong>Tester à la main</strong> : clique sur les interrupteurs d’entrée à gauche du plan. Les fils allumés (jaunes) portent un 1.</li>
+      <li><strong>Supprimer</strong> : sélectionne un composant ou un fil, puis touche Suppr (ou bouton 🗑). <strong>Annuler</strong> : Ctrl+Z.</li>
+      <li><strong>Valider</strong> : « Tester le circuit » vérifie tous les cas. Une fois réussi, ton circuit devient un nouveau composant !</li>
+    </ul>
+    <p class="muted">Ta progression est enregistrée dans ce navigateur.</p>
+    <form method="dialog" class="dlg-actions"><button class="btn primary">C’est parti !</button></form>
+  </dialog>
+
+  <script src="engine.js"></script>
+  <script src="levels.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
