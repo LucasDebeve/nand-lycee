@@ -12,6 +12,9 @@
 
   const NAND_DEF = { nand: true, name: 'NAND', label: 'NAND', inputs: ['A', 'B'], outputs: ['S'] };
 
+  // Nœud de dérivation : ne fait que prolonger un fil (aucune porte)
+  const JUNCTION_DEF = { junction: true, name: 'Nœud', label: 'Nœud', inputs: ['I'], outputs: ['O'] };
+
   function compile(circuit, inNames, outNames, lib) {
     let nSig = 1 + inNames.length; // signal 0 = constante 0 (fil non branché)
     const inSig = {};
@@ -26,7 +29,9 @@
       for (const node of circ.nodes) {
         const def = lib[node.type];
         if (!def) continue;
-        if (def.nand) {
+        if (def.junction) {
+          ctx.inst[node.id] = { junction: true };
+        } else if (def.nand) {
           const g = { a: 0, b: 0, o: nSig++ };
           gates.push(g);
           ctx.inst[node.id] = { nand: true, g };
@@ -47,6 +52,7 @@
       const inst = ctx.inst[from.n];
       if (!inst) return 0;
       if (inst.nand) return inst.g.o;
+      if (inst.junction) return resolveInput(ctx, from.n, 'I', d + 1);
       return resolveOut(inst.sub, from.p, d + 1);
     }
     function resolveInput(ctx, nodeId, pin, d) {
@@ -135,7 +141,7 @@
     return { ok, rows, nands: sim.gates.length, unstable };
   }
 
-  const api = { NAND_DEF, compile, settle, setInputs, readOutputs, buildTests, runTests };
+  const api = { NAND_DEF, JUNCTION_DEF, compile, settle, setInputs, readOutputs, buildTests, runTests };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

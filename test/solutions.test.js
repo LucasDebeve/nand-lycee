@@ -2,7 +2,7 @@
 const E = require('../engine.js');
 const LEVELS = require('../levels.js');
 
-const lib = { NAND: E.NAND_DEF };
+const lib = { NAND: E.NAND_DEF, JUNCTION: E.JUNCTION_DEF };
 
 function Builder() {
   const c = { nodes: [], wires: [] };
@@ -115,5 +115,15 @@ for (const lv of LEVELS) {
   // un circuit vide ne doit pas réussir
   const empty = E.runTests(lv, { nodes: [], wires: [] }, lib);
   if (empty.ok) { fail++; console.log('FAIL: circuit vide accepté pour', lv.id); }
+}
+// Un nœud ne doit pas changer le comportement (NON avec A dérivé par un nœud)
+{
+  const B = Builder();
+  const j = B.node('JUNCTION'); B.connect(B.IN('A'), j, 'I');
+  const n = B.node('NAND'); B.connect(B.src(j, 'O'), n, 'A'); B.connect(B.src(j, 'O'), n, 'B');
+  B.out('S', B.src(n, 'S'));
+  const r = E.runTests(LEVELS[0], B.c, lib);
+  console.log((r.ok && r.nands === 1 ? 'OK  ' : 'FAIL') + ' nœud     NAND=' + r.nands);
+  if (!(r.ok && r.nands === 1)) fail++;
 }
 process.exit(fail ? 1 : 0);

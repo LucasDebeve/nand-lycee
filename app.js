@@ -21,7 +21,7 @@
   }
 
   // ---------- Préférences (thème, taille, contraste, espacement) ----------
-  const prefs = { theme: null, size: 'md', contrast: null, spacing: false };
+  const prefs = { theme: null, size: 'md', contrast: null, spacing: false, routing: 'ortho' };
   try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || '{}')); } catch (e) { /* ignoré */ }
   const mqDark = window.matchMedia('(prefers-color-scheme: dark)');
   const mqContrast = window.matchMedia('(prefers-contrast: more)');
@@ -38,12 +38,18 @@
     document.querySelectorAll('input[name="size"]').forEach((i) => { i.checked = i.value === prefs.size; });
     $('#opt-contrast').checked = isHighContrast();
     $('#opt-spacing').checked = prefs.spacing;
+    $('#opt-routing').value = prefs.routing === 'curve' ? 'curve' : 'ortho';
   }
   $('#btn-theme').addEventListener('click', () => { prefs.theme = isDark() ? 'light' : 'dark'; savePrefs(); applyPrefs(); });
   $('#btn-a11y').addEventListener('click', () => $('#dlg-a11y').showModal());
   document.querySelectorAll('input[name="size"]').forEach((i) => i.addEventListener('change', () => { prefs.size = i.value; savePrefs(); applyPrefs(); }));
   $('#opt-contrast').addEventListener('change', (e) => { prefs.contrast = e.target.checked; savePrefs(); applyPrefs(); });
   $('#opt-spacing').addEventListener('change', (e) => { prefs.spacing = e.target.checked; savePrefs(); applyPrefs(); });
+  $('#opt-routing').addEventListener('change', (e) => {
+    prefs.routing = e.target.value; savePrefs();
+    if (S.level) renderBoard();
+    announce(e.target.value === 'curve' ? 'Fils en courbes directes' : 'Fils à angles droits, contournant les composants');
+  });
   mqDark.addEventListener('change', applyPrefs);
   mqContrast.addEventListener('change', applyPrefs);
 
@@ -63,10 +69,11 @@
     result: null, hints: 0, tests: [], idCounter: 0,
   };
   let wiring = null; // { anchor:{n,p,dir}|null, orig:wire|null, start, cur, snap, detached }
+  let lastWireClick = null;
   let dragging = null; // { id, dx, dy, snap, moved }
 
   function buildLib(idx) {
-    const lib = { NAND: Object.assign({}, E.NAND_DEF) };
+    const lib = { NAND: Object.assign({}, E.NAND_DEF), JUNCTION: Object.assign({}, E.JUNCTION_DEF) };
     for (let i = 0; i < idx; i++) {
       const lv = LEVELS[i];
       const sol = progress.solved[lv.id];
@@ -108,6 +115,7 @@
   }
   function nodeSize(node) {
     const def = S.lib[node.type];
+    if (node.type === 'JUNCTION') return { w: 36, h: 16, def };
     if (GATE_W[node.type]) return { w: GATE_W[node.type], h: 64, def, shape: true };
     const n = Math.max(def.inputs.length, def.outputs.length, 1);
     return { w: Math.max(104, def.label.length * 10 + 56), h: n * 24 + 16, def };
@@ -176,7 +184,31 @@
     S.circuit.wires = S.circuit.wires.filter((w) => !(w.to.n === to.n && w.to.p === to.p));
     S.circuit.wires.push({ id: newId('w'), from: { n: from.n, p: from.p }, to: { n: to.n, p: to.p } });
   }
+  // Double-clic sur un fil : insère un nœud, d'où l'on peut tirer d'autres fils
+  function splitWire(wireId, p) {
+    const w = S.circuit.wires.find((x) => x.id === wireId);
+    if (!w) return;
+    pushUndo();
+    const node = { id: newId('c'), type: 'JUNCTION', x: clamp(Math.round((p.x - 18) / 10) * 10, 120, W - 156), y: clamp(Math.round((p.y - 8) / 10) * 10, 10, H - 26) };
+    S.circuit.nodes.push(node);
+    S.circuit.wires = S.circuit.wires.filter((x) => x !== w);
+    S.circuit.wires.push({ id: newId('w'), from: w.from, to: { n: node.id, p: 'I' } });
+    S.circuit.wires.push({ id: newId('w'), from: { n: node.id, p: 'O' }, to: w.to });
+    S.sel = { kind: 'node', id: node.id };
+    changed();
+    announce(`${nodeName(node)} ajouté sur la connexion. Relie sa sortie à une autre entrée pour dériver le signal.`);
+  }
   function removeNode(id) {
+    const node = S.circuit.nodes.find((n) => n.id === id);
+    if (node && node.type === 'JUNCTION') {
+      // on « referme » le fil : la source du nœud est reliée directement à ses destinations
+      const inW = S.circuit.wires.find((w) => w.to.n === id);
+      const outs = S.circuit.wires.filter((w) => w.from.n === id);
+      S.circuit.nodes = S.circuit.nodes.filter((n) => n.id !== id);
+      S.circuit.wires = S.circuit.wires.filter((w) => w.from.n !== id && w.to.n !== id);
+      if (inW) outs.forEach((o) => S.circuit.wires.push({ id: newId('w'), from: inW.from, to: o.to }));
+      return;
+    }
     S.circuit.nodes = S.circuit.nodes.filter((n) => n.id !== id);
     S.circuit.wires = S.circuit.wires.filter((w) => w.from.n !== id && w.to.n !== id);
   }
@@ -215,13 +247,88 @@
     announce(`Entrée ${name} à ${S.inputs[name]}. ` + S.level.outputs.map((o) => `${o} = ${S.sim.v[S.sim.outSig[o]]}`).join(', '));
   }
 
+  // ---------- Routage des fils ----------
+  // Tracé orthogonal à coins arrondis qui contourne les composants. Pas de recherche de graphe :
+  // on teste quelques candidats (canal vertical, puis couloir horizontal) contre les boîtes englobantes,
+  // soit O(candidats × composants) par fil ; les tracés sont mémorisés tant que rien ne bouge.
+  const STUB = 16, MARGIN = 8;
+  const routeCache = new Map();
+  function obstacles() {
+    return S.circuit.nodes.map((n) => {
+      const s = nodeSize(n);
+      return { x1: n.x - MARGIN, y1: n.y - MARGIN, x2: n.x + s.w + MARGIN, y2: n.y + s.h + MARGIN };
+    });
+  }
+  function hitsH(y, xa, xb, rs) {
+    const lo = Math.min(xa, xb), hi = Math.max(xa, xb);
+    for (let i = 0; i < rs.length; i++) { const r = rs[i]; if (y > r.y1 && y < r.y2 && hi > r.x1 && lo < r.x2) return true; }
+    return false;
+  }
+  function hitsV(x, ya, yb, rs) {
+    const lo = Math.min(ya, yb), hi = Math.max(ya, yb);
+    for (let i = 0; i < rs.length; i++) { const r = rs[i]; if (x > r.x1 && x < r.x2 && hi > r.y1 && lo < r.y2) return true; }
+    return false;
+  }
+  function findRoute(a, b, rs) {
+    const sx = a.x + STUB, ex = b.x - STUB;
+    if (ex > sx) {
+      if (a.y === b.y && !hitsH(a.y, sx, ex, rs)) return [a, b];
+      const mid = (sx + ex) / 2;
+      const xs = [mid];
+      for (const r of rs) { xs.push(r.x2 + 4, r.x1 - 4); }
+      const cands = [...new Set(xs.filter((x) => x >= sx && x <= ex))].sort((p, q) => Math.abs(p - mid) - Math.abs(q - mid)).slice(0, 14);
+      for (const xm of cands) {
+        if (!hitsH(a.y, sx, xm, rs) && !hitsV(xm, a.y, b.y, rs) && !hitsH(b.y, xm, ex, rs)) {
+          return [a, { x: xm, y: a.y }, { x: xm, y: b.y }, b];
+        }
+      }
+    }
+    // couloir horizontal (fils qui reviennent en arrière ou chemin bloqué)
+    const ys = [(a.y + b.y) / 2];
+    for (const r of rs) { ys.push(r.y1 - 4, r.y2 + 4); }
+    ys.push(12, H - 12);
+    const lanes = [...new Set(ys.filter((y) => y >= 8 && y <= H - 8))]
+      .sort((p, q) => Math.abs(p - a.y) + Math.abs(p - b.y) - Math.abs(q - a.y) - Math.abs(q - b.y)).slice(0, 24);
+    for (const yl of lanes) {
+      if (!hitsV(sx, a.y, yl, rs) && !hitsH(yl, sx, ex, rs) && !hitsV(ex, yl, b.y, rs)) {
+        return [a, { x: sx, y: a.y }, { x: sx, y: yl }, { x: ex, y: yl }, { x: ex, y: b.y }, b];
+      }
+    }
+    return null;
+  }
+  function roundedPath(pts) {
+    const p = [pts[0]];
+    for (let i = 1; i < pts.length; i++) if (pts[i].x !== p[p.length - 1].x || pts[i].y !== p[p.length - 1].y) p.push(pts[i]);
+    let d = `M${p[0].x} ${p[0].y}`;
+    for (let i = 1; i < p.length - 1; i++) {
+      const a = p[i - 1], c = p[i], n = p[i + 1];
+      if ((a.x === c.x && c.x === n.x) || (a.y === c.y && c.y === n.y)) continue;
+      const l1 = Math.hypot(c.x - a.x, c.y - a.y), l2 = Math.hypot(n.x - c.x, n.y - c.y);
+      const r = Math.min(10, l1 / 2, l2 / 2);
+      d += ` L${c.x + (a.x - c.x) / l1 * r} ${c.y + (a.y - c.y) / l1 * r} Q${c.x} ${c.y} ${c.x + (n.x - c.x) / l2 * r} ${c.y + (n.y - c.y) / l2 * r}`;
+    }
+    const e = p[p.length - 1];
+    return d + ` L${e.x} ${e.y}`;
+  }
+  function wirePath(a, b, rs, sig) {
+    const key = `${a.x},${a.y},${b.x},${b.y}|${sig}`;
+    let d = routeCache.get(key);
+    if (d === undefined) {
+      const pts = findRoute(a, b, rs);
+      d = pts ? roundedPath(pts) : curve(a, b);
+      if (routeCache.size > 600) routeCache.clear();
+      routeCache.set(key, d);
+    }
+    return d;
+  }
+
   // ---------- Rendu du plan ----------
   function curve(a, b) {
     const dx = Math.max(40, Math.abs(b.x - a.x) / 2);
     return `M${a.x} ${a.y} C${a.x + dx} ${a.y} ${b.x - dx} ${b.y} ${b.x} ${b.y}`;
   }
-  function pinSvg(n, p, dir, x, y, on, wired, label) {
-    return `<circle class="pin-hit" data-pin="${p}" data-pnode="${n}" data-dir="${dir}" cx="${x}" cy="${y}" r="14"><title>${label}, valeur ${on ? 1 : 0}</title></circle>` +
+  function pinSvg(n, p, dir, x, y, on, wired, label, hr = 14) {
+    return `<circle class="pin-hit" data-pin="${p}" data-pnode="${n}" data-dir="${dir}" cx="${x}" cy="${y}" r="${hr}"><title>${label}, valeur ${on ? 1 : 0}</title></circle>` +
       `<circle class="pin ${on ? 'on' : ''} ${wired ? '' : 'free'}" cx="${x}" cy="${y}" r="6"/>`;
   }
   function renderBoard() {
@@ -235,10 +342,12 @@
     const wiredOut = new Set(S.circuit.wires.map((w) => w.from.n + '|' + w.from.p));
     let h = '';
 
+    const obs = obstacles();
+    const obsSig = obs.map((r) => r.x1 + ',' + r.y1 + ',' + r.x2 + ',' + r.y2).join(';');
     for (const w of S.circuit.wires) {
       const a = pinPos(w.from.n, w.from.p, 'out'), b = pinPos(w.to.n, w.to.p, 'in');
       if (!a || !b) continue;
-      const d = curve(a, b);
+      const d = prefs.routing === 'curve' ? curve(a, b) : wirePath(a, b, obs, obsSig);
       const sel = S.sel && S.sel.kind === 'wire' && S.sel.id === w.id;
       h += `<path class="wire ${wireVal(w) ? 'on' : ''} ${sel ? 'sel' : ''}" d="${d}" aria-hidden="true"/>`;
       h += `<path class="wire-hit" data-wire="${w.id}" d="${d}" aria-hidden="true"/>`;
@@ -279,25 +388,31 @@
       const { w, h: hh, def, shape } = nodeSize(n);
       const sel = S.sel && S.sel.kind === 'node' && S.sel.id === n.id;
       const nm = nodeName(n);
-      h += `<g class="node ${n.type === 'NAND' ? 'nand' : ''} ${sel ? 'sel' : ''}" data-node="${n.id}" transform="translate(${n.x},${n.y})"
-        tabindex="0" role="button" aria-label="${nm}, ${def.inputs.length} entrées, ${def.outputs.length} sortie${def.outputs.length > 1 ? 's' : ''}. Flèches pour déplacer, Suppr pour supprimer.">
-        <rect class="ring" x="-5" y="-5" width="${w + 10}" height="${hh + 10}" rx="9"/>
-        <title>${def.name}</title>
-        ${shape ? gateShape(n.type) + `<text class="lbl gate" x="${GATE_LBL_X[n.type]}" y="32">${def.label}</text>` : `<rect class="body" width="${w}" height="${hh}" rx="6"/><text class="lbl" x="${w / 2}" y="${hh / 2}">${def.label}</text>`}`;
-      if (!shape) def.inputs.forEach((p, i) => { h += `<text class="pl" x="9" y="${(hh - def.inputs.length * 24) / 2 + 12 + i * 24}">${p}</text>`; });
-      if (!shape) def.outputs.forEach((p, i) => { h += `<text class="pl" text-anchor="end" x="${w - 9}" y="${(hh - def.outputs.length * 24) / 2 + 12 + i * 24}">${p}</text>`; });
-      h += '</g>';
+      const junc = n.type === 'JUNCTION';
+      const onv = junc && S.sim.v[S.sim.nodeOutSig[n.id + '|O']];
+      const aria = junc ? `${nm}. Flèches pour déplacer, Suppr pour supprimer.`
+        : `${nm}, ${def.inputs.length} entrées, ${def.outputs.length} sortie${def.outputs.length > 1 ? 's' : ''}. Flèches pour déplacer, Suppr pour supprimer.`;
+      let inner;
+      if (junc) inner = `<rect class="body jn ${onv ? 'on' : ''}" width="${w}" height="${hh}" rx="8"/>`;
+      else if (shape) inner = gateShape(n.type) + `<text class="lbl gate" x="${GATE_LBL_X[n.type]}" y="32">${def.label}</text>`;
+      else {
+        inner = `<rect class="body" width="${w}" height="${hh}" rx="6"/><text class="lbl" x="${w / 2}" y="${hh / 2}">${def.label}</text>`;
+        def.inputs.forEach((p, i) => { inner += `<text class="pl" x="9" y="${(hh - def.inputs.length * 24) / 2 + 12 + i * 24}">${p}</text>`; });
+        def.outputs.forEach((p, i) => { inner += `<text class="pl" text-anchor="end" x="${w - 9}" y="${(hh - def.outputs.length * 24) / 2 + 12 + i * 24}">${p}</text>`; });
+      }
+      h += `<g class="node ${n.type === 'NAND' ? 'nand' : ''} ${sel ? 'sel' : ''}" data-node="${n.id}" transform="translate(${n.x},${n.y})" tabindex="0" role="button" aria-label="${aria}">
+        <rect class="ring" x="-5" y="-5" width="${w + 10}" height="${hh + 10}" rx="9"/><title>${def.name}</title>${inner}</g>`;
     }
     for (const n of S.circuit.nodes) {
       const { def } = nodeSize(n);
       def.inputs.forEach((p) => {
         const pos = pinPos(n.id, p, 'in');
         const w = S.circuit.wires.find((x) => x.to.n === n.id && x.to.p === p);
-        h += pinSvg(n.id, p, 'in', pos.x, pos.y, wireVal(w), !!w, endpointText(n.id, p, 'in'));
+        h += pinSvg(n.id, p, 'in', pos.x, pos.y, wireVal(w), !!w, endpointText(n.id, p, 'in'), n.type === 'JUNCTION' ? 8 : 14);
       });
       def.outputs.forEach((p) => {
         const pos = pinPos(n.id, p, 'out');
-        h += pinSvg(n.id, p, 'out', pos.x, pos.y, S.sim.v[S.sim.nodeOutSig[n.id + '|' + p]], wiredOut.has(n.id + '|' + p), endpointText(n.id, p, 'out'));
+        h += pinSvg(n.id, p, 'out', pos.x, pos.y, S.sim.v[S.sim.nodeOutSig[n.id + '|' + p]], wiredOut.has(n.id + '|' + p), endpointText(n.id, p, 'out'), n.type === 'JUNCTION' ? 8 : 14);
       });
     }
     svg.innerHTML = h;
@@ -341,8 +456,15 @@
       dragging = { id: n.id, dx: p.x - n.x, dy: p.y - n.y, snap: snapshot(), moved: false };
       renderBoard();
     } else if (wire) {
-      S.sel = { kind: 'wire', id: wire.dataset.wire };
-      renderBoard();
+      const now = performance.now(), id = wire.dataset.wire;
+      if (lastWireClick && lastWireClick.id === id && now - lastWireClick.t < 400 && Math.hypot(p.x - lastWireClick.x, p.y - lastWireClick.y) < 14) {
+        lastWireClick = null;
+        splitWire(id, p);
+      } else {
+        lastWireClick = { id, t: now, x: p.x, y: p.y };
+        S.sel = { kind: 'wire', id };
+        renderBoard();
+      }
     } else {
       S.sel = null;
       renderBoard();
@@ -449,6 +571,7 @@
     const box = $('#palette');
     box.innerHTML = '';
     for (const type in S.lib) {
+      if (type === 'JUNCTION') continue;
       const def = S.lib[type];
       const b = document.createElement('button');
       b.type = 'button';
@@ -563,7 +686,7 @@
     $('#conn-list').innerHTML = S.circuit.wires.length
       ? S.circuit.wires.map((w) => {
         const txt = `${endpointText(w.from.n, w.from.p, 'out')} → ${endpointText(w.to.n, w.to.p, 'in')}`;
-        return `<li><span>${txt}</span><button type="button" class="btn small" data-delwire="${w.id}" aria-label="Supprimer la connexion : ${txt}">Supprimer</button></li>`;
+        return `<li><span>${txt}</span><span><button type="button" class="btn small" data-splitwire="${w.id}" aria-label="Insérer un nœud sur la connexion : ${txt}">Ajouter un nœud</button> <button type="button" class="btn small" data-delwire="${w.id}" aria-label="Supprimer la connexion : ${txt}">Supprimer</button></span></li>`;
       }).join('')
       : '<li class="muted">Aucune connexion pour l’instant.</li>';
     $('#comp-list').innerHTML = S.circuit.nodes.length
@@ -581,6 +704,14 @@
     announce(`Connexion créée : ${endpointText(from.n, from.p, 'out')} vers ${endpointText(to.n, to.p, 'in')}`);
   });
   $('#dlg-conn').addEventListener('click', (e) => {
+    const sw = e.target.closest('[data-splitwire]');
+    if (sw) {
+      const w = S.circuit.wires.find((x) => x.id === sw.dataset.splitwire);
+      const a = w && pinPos(w.from.n, w.from.p, 'out'), b = w && pinPos(w.to.n, w.to.p, 'in');
+      if (a && b) splitWire(w.id, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      $('#conn-from').focus();
+      return;
+    }
     const dw = e.target.closest('[data-delwire]'), dn = e.target.closest('[data-delnode]');
     if (!dw && !dn) return;
     pushUndo();

@@ -70,6 +70,10 @@
         <div id="palette" class="palette" role="group" aria-labelledby="palette-label"></div>
       </div>
       <div class="board-wrap">
+        <select id="opt-routing" class="route-sel" aria-label="Tracé des fils" title="Tracé des fils">
+          <option value="ortho">Angles droits</option>
+          <option value="curve">Courbes</option>
+        </select>
         <svg id="board" viewBox="0 0 1100 680" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Plan de travail du circuit"></svg>
         <p class="board-tip">Glisse d’une sortie (à droite) vers une entrée (à gauche) pour relier. Clavier : Tab, flèches, et le bouton clavier pour relier sans souris.</p>
       </div>
