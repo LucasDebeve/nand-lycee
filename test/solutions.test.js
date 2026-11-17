@@ -82,6 +82,26 @@ const sol = {
     const [m] = B.use('dlatch', B.IN('D'), nc);
     B.out('Q', B.use('dlatch', m, B.IN('Clk'))[0]);
   },
+  alu1(B) {
+    const [bx] = B.use('xor', B.IN('B'), B.IN('Op0'));
+    const [s, r] = B.use('add1', B.IN('A'), bx, B.IN('Re'));
+    const [e] = B.use('et', B.IN('A'), B.IN('B')); const [o] = B.use('ou', B.IN('A'), B.IN('B'));
+    const [lg] = B.use('mux', e, o, B.IN('Op0'));
+    B.out('S', B.use('mux', s, lg, B.IN('Op1'))[0]); B.out('Rs', r);
+  },
+  zero4(B) {
+    const [o1] = B.use('ou', B.IN('X0'), B.IN('X1')); const [o2] = B.use('ou', B.IN('X2'), B.IN('X3'));
+    const [o3] = B.use('ou', o1, o2);
+    B.out('Z', B.use('non', o3)[0]);
+  },
+  alu4(B) {
+    let carry = B.IN('Op0'); const s = [];
+    for (let i = 0; i < 4; i++) {
+      const [si, r] = B.use('alu1', B.IN('A' + i), B.IN('B' + i), B.IN('Op0'), B.IN('Op1'), carry);
+      B.out('S' + i, si); s.push(si); carry = r;
+    }
+    B.out('Z', B.use('zero4', ...s)[0]);
+  },
 };
 
 let fail = 0;

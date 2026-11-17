@@ -7,7 +7,7 @@
 
   const LEVELS = [
     {
-      id: 'non', part: 'Logique de base', title: 'NON', label: 'NON',
+      id: 'non', part: 'Logique de base', title: 'NON', label: 'NOT',
       inputs: ['A'], outputs: ['S'],
       desc: 'Construis une porte NON (inverseur) : la sortie S est l’opposé de l’entrée A.',
       lesson: 'Une porte NAND (« NON-ET ») donne 0 uniquement quand ses deux entrées valent 1, sinon elle donne 1. Que se passe-t-il quand on lui envoie deux fois la même valeur ?',
@@ -18,7 +18,7 @@
       fn: (i) => ({ S: b(!i.A) }),
     },
     {
-      id: 'et', part: 'Logique de base', title: 'ET', label: 'ET',
+      id: 'et', part: 'Logique de base', title: 'ET', label: 'AND',
       inputs: ['A', 'B'], outputs: ['S'],
       desc: 'Construis une porte ET : S vaut 1 uniquement si A et B valent 1 tous les deux.',
       lesson: 'NAND signifie « NON-ET » : c’est un ET dont la sortie est inversée. Donc inverser un NAND redonne un ET.',
@@ -29,7 +29,7 @@
       fn: (i) => ({ S: b(i.A && i.B) }),
     },
     {
-      id: 'ou', part: 'Logique de base', title: 'OU', label: 'OU',
+      id: 'ou', part: 'Logique de base', title: 'OU', label: 'OR',
       inputs: ['A', 'B'], outputs: ['S'],
       desc: 'Construis une porte OU : S vaut 1 si A vaut 1, ou si B vaut 1 (ou les deux).',
       lesson: 'Loi de De Morgan : A OU B = NON( NON(A) ET NON(B) ). Et NON( x ET y ) n’est rien d’autre qu’un NAND !',
@@ -184,6 +184,54 @@
         { in: { D: 1, Clk: 0 }, out: { Q: 0 } },
         { in: { D: 1, Clk: 1 }, out: { Q: 1 } },
       ],
+    },
+    {
+      id: 'alu1', part: 'UAL (défi)', title: 'UAL 1 bit', label: 'UAL 1',
+      inputs: ['A', 'B', 'Op0', 'Op1', 'Re'], outputs: ['S', 'Rs'],
+      desc: 'Une UAL (unité arithmétique et logique) calcule. Celle-ci traite un seul bit selon un code opération Op1 Op0 : 00 = A + B, 01 = A − B, 10 = A ET B, 11 = A OU B. Re est la retenue d’entrée, Rs la retenue de sortie (de l’additionneur).',
+      lesson: 'Pour soustraire, l’ordinateur additionne l’opposé : A − B = A + (inverse de B) + 1. Inverser B quand Op0 = 1 se fait avec un OU exclusif (B XOR Op0), et le « +1 » est la retenue d’entrée Re du premier bit. Un multiplexeur choisit ensuite entre le résultat arithmétique et le résultat logique (Op1).',
+      hints: [
+        'Prépare B’ = B XOR Op0 : B est inversé uniquement quand Op0 = 1.',
+        'Additionneur complet sur A, B’ et Re : il donne la somme et la retenue Rs.',
+        'Calcule A ET B et A OU B, puis choisis l’un des deux avec un multiplexeur piloté par Op0.',
+        'Un dernier multiplexeur piloté par Op1 choisit entre la somme (Op1 = 0) et le résultat logique (Op1 = 1) : c’est S.',
+      ],
+      fn: (i) => {
+        const t = i.A + (i.B ^ i.Op0) + i.Re;
+        const logic = i.Op0 ? (i.A | i.B) : (i.A & i.B);
+        return { S: i.Op1 ? logic : (t & 1), Rs: t >> 1 };
+      },
+    },
+    {
+      id: 'zero4', part: 'UAL (défi)', title: 'Détecteur de zéro', label: 'ZÉRO',
+      inputs: ['X0', 'X1', 'X2', 'X3'], outputs: ['Z'],
+      desc: 'Z vaut 1 uniquement quand les 4 bits X0 à X3 valent tous 0. Ce « drapeau zéro » permet à un processeur de tester un résultat.',
+      lesson: 'Un nombre est nul si aucun de ses bits ne vaut 1. Il suffit de détecter « au moins un bit à 1 » (un grand OU), puis d’inverser.',
+      hints: [
+        'Combine les bits deux par deux avec des OU.',
+        'Un OU de X0 et X1, un OU de X2 et X3, puis un OU des deux résultats.',
+        'Inverse le résultat final avec un NON.',
+      ],
+      fn: (i) => ({ Z: b(!(i.X0 || i.X1 || i.X2 || i.X3)) }),
+    },
+    {
+      id: 'alu4', part: 'UAL (défi)', title: 'UAL 4 bits', label: 'UAL 4',
+      inputs: ['A0', 'A1', 'A2', 'A3', 'B0', 'B1', 'B2', 'B3', 'Op0', 'Op1'],
+      outputs: ['S0', 'S1', 'S2', 'S3', 'Z'],
+      desc: 'Assemble l’UAL complète : elle applique l’opération choisie (00 : A + B, 01 : A − B, 10 : A ET B, 11 : A OU B) aux nombres A3..A0 et B3..B0, donne le résultat S3..S0 sur 4 bits et le drapeau Z (résultat nul).',
+      lesson: 'Tu as maintenant tout : quatre UAL 1 bit en chaîne (la retenue de l’une entre dans la suivante) et un détecteur de zéro. C’est le cœur de calcul d’un processeur : l’UAL de ton CPU fait exactement ça, avec plus de bits et plus d’opérations.',
+      hints: [
+        'Utilise 4 UAL 1 bit, une par bit. Op0 et Op1 vont à toutes les UAL.',
+        'La retenue d’entrée de la première UAL vaut Op0 (c’est le « +1 » de la soustraction). Ensuite, chaque Rs va dans le Re de la suivante.',
+        'Envoie S0..S3 dans le détecteur de zéro pour obtenir Z.',
+      ],
+      fn: (i) => {
+        const a = i.A0 + 2 * i.A1 + 4 * i.A2 + 8 * i.A3;
+        const c = i.B0 + 2 * i.B1 + 4 * i.B2 + 8 * i.B3;
+        const op = i.Op0 + 2 * i.Op1;
+        const r = [a + c, a - c, a & c, a | c][op] & 15;
+        return { S0: r & 1, S1: (r >> 1) & 1, S2: (r >> 2) & 1, S3: (r >> 3) & 1, Z: b(r === 0) };
+      },
     },
   ];
 
